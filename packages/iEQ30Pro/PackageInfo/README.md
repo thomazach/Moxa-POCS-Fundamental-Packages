@@ -1,5 +1,2 @@
-# Moxa-POCS-Fundamental-Packages
-A collection of Moxa-POCS packages for several mounts and sensors that are critical to the function of a unit. The packages here are designed to be installed into https://github.com/thomazach/POCS-moxa-build using its built in CLI features.
-
-# Branches
-Each branch in this repository is designed to be for a specific piece of hardware.
+# iEQ30Pro Mount Software Package
+This moxa-pocs package is designed for the iEQ30Pro German equatorial telescope mount. It should work with a wide range of mounts listed in [iOptron's RS-232 Serial Command Language V2.5](http://www.ioptron.com/v/ASCOM/RS-232_Command_Language2014_V2.5.pdf). This module can be installed, uninstalled, and upgraded using the panoptes-CLI within [moxa-pocs](https://github.com/thomazach/POCS-moxa-build), specifically with the package command.
