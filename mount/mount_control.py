@@ -308,9 +308,9 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
     # Set mount guide rate to max value
     if not mountSerialPort.is_open:
         mountSerialPort.open()
-    mountSerialPort.write(b':G9099')
+    mountSerialPort.write(b':RG9099')
     _ = mountSerialPort.read(1)
-    logger.debug("Mount response to setting guiding rates: {_}")
+    logger.debug(f"Mount response to setting guiding rates: {_}")
 
     # Confirm guiding rate took effect
     mountSerialPort.write(b':AG#')
