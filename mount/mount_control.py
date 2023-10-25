@@ -293,7 +293,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
               with a 'failure' status from the astrometry.net API. Unsolvable images
               are of no scientific value to project PANOTPES.
     '''
-    if astrometryAPI in (None, 0, False):
+    if astrometryAPI in (None, 0, False) or "None":
         logger.info("Skipping plate solving as directed by the PLATE_SOLVE setting.")
         return
     
