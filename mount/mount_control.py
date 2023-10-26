@@ -461,7 +461,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
                         #          2. Wait X minutes and try again (cloud cover, starlink satelite, whatever)
                         #          3. Fully turn off the system
                         pass
-                    return
+                    return False, False
                 elif time.time() > timeout:
                     logger.warning("Plate-solve timeout reached waiting for astronomy.net to plate solve the image.")
                     return
@@ -549,7 +549,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
     ### Start of correctTracking() ### 
     try:
 
-        RAGuideRate, DECGuideRate = 0.9, 0.9 #setTrackingSettings()
+        RAGuideRate, DECGuideRate = setTrackingSettings()
 
         currentImageFolder = getCurrentImageFolder()
 
@@ -566,10 +566,12 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
             logger.debug(f"Converted {rawImage} to .thumb.jpg")
 
             RADecimal, DECDecimal = plateSolveWithAPI()
-            
-            logger.debug(f"Time spent calculating correction: {time.time() - start}")
 
-            #executeTrackingCorrection()
+            if RADecimal is not False: # RADecimal == False if plate solving fails
+            
+                logger.debug(f"Time spent calculating correction: {time.time() - start}")
+
+                executeTrackingCorrection()
 
     except Exception as e:
         logger.error("Error during plate solving:", e)
