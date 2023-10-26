@@ -198,7 +198,7 @@ def park_slewToTarget(coordinates, mountSerialPort):
 
 def slewToTarget(coordinates, mountSerialPort=None):
     '''
-        Slews to coordinates, from a parked states.
+        Slews to coordinates, from a parked state.
 
         coordinates is a astropy SkyCoord object
 
@@ -275,7 +275,9 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
     '''
      This function is responsible for converting the latest image into a .jpg, uploading it to
      astrometry.net, recieving the plate solved response, and executing a tracking correction 
-     on the mount.
+     on the mount. There are functions defined inside of this one to make the actual body more
+     readable.
+
      Inputs:
             mountSerialPort
               A serial.Serial object connected to the mount
@@ -293,7 +295,8 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
               with a 'failure' status from the astrometry.net API. Unsolvable images
               are of no scientific value to project PANOTPES.
     '''
-    if astrometryAPI in (None, 0, False) or "None":
+    # Exit function of plate solving is not enabled
+    if astrometryAPI in (None, "None", 0, False):
         logger.info("Skipping plate solving as directed by the PLATE_SOLVE setting.")
         return
     
@@ -303,38 +306,44 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
     
     from urllib import request, parse
 
-    time.sleep(5) # Let camera module make observation folder
+    def setTrackingSettings():
+        '''
+        Sets mount guiding to maximum speed and returns what the mount actually says its guiding rate is for redundancy.
+        Output:
+            RAGuideRate, DECGuideRate
+        '''
+        # Set mount guide rate to max value
+        if not mountSerialPort.is_open:
+            mountSerialPort.open()
+        mountSerialPort.write(b':RG9099')
+        _ = mountSerialPort.read(1)
+        logger.debug(f"Mount response to setting guiding rates: {_}")
 
-    # Set mount guide rate to max value
-    if not mountSerialPort.is_open:
-        mountSerialPort.open()
-    mountSerialPort.write(b':RG9099')
-    _ = mountSerialPort.read(1)
-    logger.debug(f"Mount response to setting guiding rates: {_}")
+        # Confirm guiding rate took effect
+        mountSerialPort.write(b':AG#')
+        out = mountSerialPort.read(5).decode('utf-8')
+        RAGuideRate = float('0.' + out[0:1])  # 0.XX * sidereal, min rate = 0.01, max rate = 0.90
+        DECGuideRate = float('0.' + out[2:3]) # 0.XX * sidereal, min rate = 0.10, max rate = 0.99
+        logger.debug(f"Mount reported guiding rates: {RAGuideRate=}  {DECGuideRate=}")
+        return RAGuideRate, DECGuideRate
 
-    # Confirm guiding rate took effect
-    mountSerialPort.write(b':AG#')
-    out = mountSerialPort.read(5).decode('utf-8')
-    RAGuideRate = float('0.' + out[0:1])  # 0.XX * sidereal, min rate = 0.01, max rate = 0.90
-    DECGuideRate = float('0.' + out[2:3]) # 0.XX * sidereal, min rate = 0.10, max rate = 0.99
-    logger.debug(f"Mount reported guiding rates: {RAGuideRate=}  {DECGuideRate=}")
+    def getCurrentImageFolder():
+        # Find most recent observation directory
+        time.sleep(5) # Let camera module make observation folder
+        dates = []
+        format = "%Y-%m-%d_%H:%M:%S"
+        for fileName in os.listdir(f"{parentPath}/images"):
+            try:
+                dates.append(datetime.strptime(fileName, format))
+            except Exception:
+                pass
 
-    # Find most recent observation directory
-    dates = []
-    format = "%Y-%m-%d_%H:%M:%S"
-    for fileName in os.listdir(f"{parentPath}/images"):
-        try:
-            dates.append(datetime.strptime(fileName, format))
-        except Exception:
-            pass
+        currentImageFolder = datetime.strftime(max(dates), format)
+        logger.debug(f"Found the most recent observation folder: {parentPath}/images/{currentImageFolder}")
 
-    currentImageFolder = datetime.strftime(max(dates), format)
-    logger.debug(f"Found the most recent observation folder: {parentPath}/images/{currentImageFolder}")
-
-    previousRawImages = []
-    camerasObserving = True
-    while camerasObserving:
-
+        return currentImageFolder
+    
+    def getNewestImages(previousRawImages):
         # Find the most recent image in the most recent observation folder, search for the first image until a timeout period of 5 minutes
         logger.debug("Waiting for new raw images...")
         timeout = time.time() + 60 * 5
@@ -352,7 +361,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
             try:
                 rawImage = newRawImages[-1]
                 logger.debug("Found new raw images.")
-                break
+                return rawImage, previousRawImages
             except IndexError:
                 pass
 
@@ -362,13 +371,10 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
 
             time.sleep(1)
 
-
-        start = time.time()
-        logger.info("Correcting tracking by plate solving...")
-
-        # Convert newest .cr2 into a .jpg
-        os.system(f"dcraw -e {rawImage}")
-        logger.debug(f"Converted {rawImage} to .thumb.jpg")
+    def plateSolveWithAPI():
+        '''
+        Wrangles the astrometry API to plate solve the .thumb.jpg. Returns an (RA, DEC) touple
+        '''
 
         logger.debug("Logging into astrometry.net through the API.")
         data = parse.urlencode({'request-json': json.dumps({"apikey": astrometryAPI})}).encode()
@@ -475,7 +481,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
                     DECDecimal = response['dec']
 
                     logger.debug(f"Plate solve coordinates: ra: {RADecimal} dec: {DECDecimal}")
-                    break
+                    return RADecimal, DECDecimal
                 except KeyError as e:
                     pass
 
@@ -486,9 +492,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
         else:
             logger.warning("Problem logging into the astrometry.net API! Check your API key and internet connection.")
 
-        end = time.time()
-        logger.debug(f"Time spent calculating correction: {end - start}")
-
+    def executeTrackingCorrection():
         # Perform guiding - aka tracking correction
         RACorrection = RADecimal - coordinates.ra.deg
         DECCorrection = DECDecimal - coordinates.dec.deg
@@ -542,6 +546,34 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
         logger.info("Succesfully executed necessary tracking corrections.")
         time.sleep(100)
 
+    ### Start of correctTracking() ### 
+    try:
+
+        RAGuideRate, DECGuideRate = 0.9, 0.9 #setTrackingSettings()
+
+        currentImageFolder = getCurrentImageFolder()
+
+        previousRawImages = []
+        camerasObserving = True
+        while camerasObserving:
+            rawImage, previousRawImages = getNewestImages(previousRawImages)
+
+            start = time.time() # Time how long it takes to get actual coordinates after taking an image for logging and understanding how plate solve time impacts guiding
+            logger.info("Correcting tracking by plate solving...")
+
+            # Convert newest .cr2 into a .jpg
+            os.system(f"dcraw -e {rawImage}")
+            logger.debug(f"Converted {rawImage} to .thumb.jpg")
+
+            RADecimal, DECDecimal = plateSolveWithAPI()
+            
+            logger.debug(f"Time spent calculating correction: {time.time() - start}")
+
+            #executeTrackingCorrection()
+
+    except Exception as e:
+        logger.error("Error during plate solving:", e)
+
 def main():
     logger.info("Mount module activated.")
 
@@ -587,11 +619,9 @@ def main():
                 os.system(f'python3 {parentPath}/cameras/camera_control.py')
                 logger.info("Started the camera module.")
 
-                try:
-                    guideThread = threading.Thread(target=correctTracking, args=(mount_port, coordinates, ASTROMETRY_API, ABORT_FAILED_SOLVE_ATTEMPT), daemon=True)
-                    guideThread.start()
-                except Exception as e:
-                    logger.error("Encountered an error while trying to guide the mount", e)
+                guideThread = threading.Thread(target=correctTracking, args=(mount_port, coordinates, ASTROMETRY_API, ABORT_FAILED_SOLVE_ATTEMPT), daemon=True)
+                guideThread.start()
+
 
             case 'park':
                 print("Parking the mount.")
