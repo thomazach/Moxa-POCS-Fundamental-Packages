@@ -196,13 +196,16 @@ def park_slewToTarget(coordinates, mountSerialPort):
                 logger.info(f"Response to request to stop slewing the DEC axis: {_}")
                 break
 
-def slewToTarget(coordinates, mountSerialPort=None):
+def slewToTarget(coordinates, mountSerialPort):
     '''
         Slews to coordinates, from a parked state.
 
         coordinates is a astropy SkyCoord object
 
         mountSerialPort is a serial.Serial object representing the mount
+
+        Output:
+            True or False bool. If True, mount accepted slew request, if False, mount rejected slew request 
 
     '''
 
@@ -249,7 +252,13 @@ def slewToTarget(coordinates, mountSerialPort=None):
     _ = mountSerialPort.read()
     logger.info("Slewing to target.")
     logger.debug(f"Result of sending the slew command: {_}")
-    time.sleep(30)
+
+    if _ == b"0":
+        return False
+
+    elif _ == b"1":
+        time.sleep(30)
+        return True
 
 def park(mountSerialPort, location):
     '''
@@ -270,6 +279,8 @@ def park(mountSerialPort, location):
         mountSerialPort.open()
 
     park_slewToTarget(parkPosition, mountSerialPort)
+
+    logger.info("Done parking the mount.")
 
 def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSolve):
     '''
@@ -618,13 +629,29 @@ def main():
                 logger.debug(f"Result of unpark command: {_}")
 
                 coordinates = SkyCoord(current_target.position['ra'], current_target.position['dec'], unit=(u.hourangle, u.deg)) 
-                slewToTarget(coordinates, mount_port)
-                sendTargetObjectCommand(current_target, 'take images')
-                os.system(f'python3 {parentPath}/cameras/camera_control.py')
-                logger.info("Started the camera module.")
+                acceptedSlew = slewToTarget(coordinates, mount_port)
 
-                guideThread = threading.Thread(target=correctTracking, args=(mount_port, coordinates, ASTROMETRY_API, ABORT_FAILED_SOLVE_ATTEMPT), daemon=True)
-                guideThread.start()
+                if not acceptedSlew:
+                    logger.warning("Mount did not accept slew command. Parking mount, system will try observing next target.")
+                    print("Mount will not slew to target because of altitude or mechanical limits. Aborting observation of this target.")
+                    print("By default, the mounts altitude limit is set to +30 degrees. You can change it using the hand controller.")
+
+                    park(mount_port, UNIT_LOCATION)
+                    sendTargetObjectCommand(current_target, 'parked')
+                    time.sleep(2)
+                    mount_port.close()
+                    logger.debug("Closed the mount's serial port.")
+                    break
+
+                elif acceptedSlew:
+                    current_target = request_mount_command()
+                    sendTargetObjectCommand(current_target, 'parked')
+                    sendTargetObjectCommand(current_target, 'take images')
+                    os.system(f'python3 {parentPath}/cameras/camera_control.py')
+                    logger.info("Started the camera module.")
+
+                    guideThread = threading.Thread(target=correctTracking, args=(mount_port, coordinates, ASTROMETRY_API, ABORT_FAILED_SOLVE_ATTEMPT), daemon=True)
+                    guideThread.start()
 
 
             case 'park':
