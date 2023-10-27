@@ -455,12 +455,6 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
                     break
                 elif response["status"] == "failure":
                     logger.warning("Unable to plate solve image.")
-                    if abortOnFailedSolve:
-                        # TODO: Decide and implement one of the following:
-                        #          1. Go to the next target
-                        #          2. Wait X minutes and try again (cloud cover, starlink satelite, whatever)
-                        #          3. Fully turn off the system
-                        pass
                     return False, False
                 elif time.time() > timeout:
                     logger.warning("Plate-solve timeout reached waiting for astronomy.net to plate solve the image.")
@@ -572,6 +566,14 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
                 logger.debug(f"Time spent calculating correction: {time.time() - start}")
 
                 executeTrackingCorrection()
+            
+            if abortOnFailedSolve and RADecimal == False:
+                # TODO: Decide and implement one of the following:
+                #          1. Go to the next target
+                #          2. Wait X minutes and try again (cloud cover, starlink satelite, whatever)
+                #          3. Fully turn off the system
+                #          4. Remove this feature and just continue to try and plate solve
+                pass
 
     except Exception as e:
         logger.error("Error during plate solving:", e)
