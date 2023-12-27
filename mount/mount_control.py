@@ -95,7 +95,13 @@ def connect_to_mount():
     return mountSerialPort
 
 def getCurrentSkyCoord(port):
-    ### Returns a SkyCoord object of whatever the mount thinks it's currently pointing at (polar alignment required) ###
+    '''
+    Returns a SkyCoord object with the coords returned by the mount.
+
+    The mount has its own RA DEC coordinate system that's defined using the servo motors,
+    this system can be changed with rs-232 commands, and may not reflect the actual coordinates
+    at both a large(completely wrong coordinate system) and small scale(servo motor error). 
+    '''
     logger.debug("Getting the current RA/DEC coordinates of the mount.")
     port.write(b':GEC#')
     rawPosition = port.read(18).decode('utf-8')
@@ -106,6 +112,160 @@ def getCurrentSkyCoord(port):
     logger.debug(f"{RADecimalDegree=}     {DECDecimalDegree=}")
     
     return SkyCoord(RADecimalDegree, DECDecimalDegree, unit=u.deg)
+
+def getMountStatus(port):
+
+    '''
+    Input:
+        port - serial.Serial object corresponding to the mount's port with proper configuration settings
+    
+    Output:
+        mountStatusDict
+            Dictionary containing all parsed infromation. Values are human readable.
+    '''
+    if not port.is_open:
+        port.open()
+    
+    # Interface with hardware to get the raw string response
+    logger.debug("Getting mount status.")
+    port.write(b':GLS')
+    rawStatusResponse = port.read(20)
+    logger.debug(f"Recieved raw mount status: {rawStatusResponse}")
+
+    # Parse raw string to dictionary
+    mountLongitude = int(rawStatusResponse[0:7])/3600
+    mountLatitude = int(rawStatusResponse[7:13])/3600 - 90
+
+    gps = rawStatusResponse[13]
+    match gps:
+
+        case '0':
+            gps = 'missing'
+        case '1':
+            gps = 'installed'
+        case '2':
+            gps = 'recieved_data'
+
+    mountState = rawStatusResponse[14]
+    match mountState:
+
+        case '0':
+            mountState = "stopped"
+        case '1':
+            mountState = "tracking"
+        case '2':
+            mountState = "slewing"
+        case '3':
+            mountState = "auto_guiding"
+        case '4':
+            mountState = "meridian_flipping"
+        case '5':
+            mountState = "tracking_with_error_correction"
+        case '6':
+            mountState = "parked"
+        case '7':
+            mountState = "home"
+
+    trackingRate = rawStatusResponse[15]
+    match trackingRate:
+        case '0':
+            trackingRate = "sidereal"
+        case '1':
+            trackingRate = "lunar"
+        case '2':
+            trackingRate = "solar"
+        case '3':
+            trackingRate = "king"
+        case '4':
+            trackingRate = "custom"
+
+    buttonRate = rawStatusResponse[16]
+    match buttonRate:
+        case '1':
+            buttonRate = "1x sidereal"
+        case '2':
+            buttonRate = "2x sidereal"
+        case '3':
+            buttonRate = "8x sidereal"
+        case '4':
+            buttonRate = "16x sidereal"
+        case '5':
+            buttonRate = "64x sidereal"
+        case '6':
+            buttonRate = "128x sidereal"
+        case '7':
+            buttonRate = "256x sidereal"
+        case '8':
+            buttonRate = "512x sidereal"
+        case '9':
+            buttonRate = "maximum"
+
+    mountTimeSource = rawStatusResponse[17]
+    match mountTimeSource:
+        case "1":
+            mountTimeSource = "RS-232_OR_ethernet"
+        case "2":
+            mountTimeSource = "hand_controller"
+        case "3":
+            mountTimeSource = "gps"
+
+    mountHemisphere = rawStatusResponse[18]
+    match mountHemisphere:
+        case "0":
+            mountHemisphere = "southern"
+        case "1":
+            mountHemisphere = "northern"
+
+    mountStatusDict = {'mount_longitude': mountLongitude, 'mount_latitude': mountLatitude, 'gps_state': gps, 'mount_state': mountState, 'tracking_rate': trackingRate, 'button_rate': buttonRate, 'mount_time_source': mountTimeSource, 'mount_hemisphere': mountHemisphere}
+    logger.debug(f"Parsed raw mount status into readable dictionary: {mountStatusDict}")
+
+    return mountStatusDict
+
+def waitForMountState(port, waitKey, waitState, timeout=120):
+    '''
+    Inputs:
+        port: serial.Serial object
+            Values correspond to the mount's port with proper configuration settings
+
+        waitKey: String
+            A dictionary key of the mountStatusDict returned by the getMountStatus function. A list of valid keys is below:
+            'mount_longitude', 'mount_latitude', 'gps_state', 'mount_state', 'tracking_rate', 'button_rate', 'mount_time_source', 'mount_hemisphere'
+
+        waitState: String
+            The human readable state designation of the mount. These should correspond to the human readable output
+            of getMountStatus
+
+        timeout: int
+            Optional timeout in seconds to wait before giving up
+    
+    Output:
+        True if state is the desired state, false if the timeout was reached before the mount switched to the requested state
+
+    Notes:
+        DO NOT THREAD. If mount response is garbled or the wrong length, mount control is lost. Threading this will likely cause 
+        other functions read() to grab the wrong data, meaning the functions recieve bad serial responses. 
+            
+    '''
+
+    logger.info(f"Waiting for mount to change its {waitKey} state to {waitState}...")
+    waitUntil = time.time() + timeout
+    while waitUntil > time.time():
+        logger.info("Checking mount states...")
+        mountStates = getMountStatus(port)
+
+        try:
+
+            if mountStates[waitKey] == waitState:
+                logger.info(f"Mount has changed its {waitKey} state to {waitState}.")
+                return True
+    
+        except KeyError as e:
+            logger.critical("Bad key used in waitForMountStatus call!")
+            print(e)
+
+        time.sleep(3)
+    
+    return False
 
 def park_slewToTarget(coordinates, mountSerialPort):
     '''
@@ -126,7 +286,7 @@ def park_slewToTarget(coordinates, mountSerialPort):
     _ = mountSerialPort.read()
     logger.debug(f"Park slew: Response to go home request: {_}")
 
-    time.sleep(20)
+    waitForMountState(mountSerialPort, 'mount_state', 'home')
 
     if not mountSerialPort.is_open:
         mountSerialPort.open()
@@ -221,7 +381,7 @@ def slewToTarget(coordinates, mountSerialPort):
     logger.debug(f"Result of go to home request: {_}")
     logger.info("Waiting for mount to reach the home position.")
 
-    time.sleep(20)
+    waitForMountState(mountSerialPort, 'mount_state', 'home')
 
     # Format desired coordinates into serial commands
     RA_string = str(round(coordinates.ra.deg * 24/360 * 60 * 60 * 1000))
@@ -257,7 +417,7 @@ def slewToTarget(coordinates, mountSerialPort):
         return False
 
     elif _ == b"1":
-        time.sleep(30)
+        waitForMountState(mountSerialPort, 'mount_state', 'tracking')
         return True
 
 def park(mountSerialPort, location):
