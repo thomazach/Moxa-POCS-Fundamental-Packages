@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 import time
 import serial
 import pickle
@@ -26,7 +27,7 @@ def request_mount_command():
     with open(f"{parentPath}/pickle/current_target.pickle", "rb") as f:
         current_target = pickle.load(f)
 
-    logger.debug(f"Read current_target.pickle and recieved: {current_target}")
+    logger.debug(f"Read current_target.pickle and recieved: \n {current_target}")
 
     return current_target
 
@@ -128,8 +129,8 @@ def getMountStatus(port):
     
     # Interface with hardware to get the raw string response
     logger.debug("Getting mount status.")
-    port.write(b':GLS')
-    rawStatusResponse = port.read(20)
+    port.write(b':GLS#')
+    rawStatusResponse = port.read(20).decode('utf-8')
     logger.debug(f"Recieved raw mount status: {rawStatusResponse}")
 
     # Parse raw string to dictionary
@@ -493,8 +494,8 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
         # Confirm guiding rate took effect
         mountSerialPort.write(b':AG#')
         out = mountSerialPort.read(5).decode('utf-8')
-        RAGuideRate = float('0.' + out[0:1])  # 0.XX * sidereal, min rate = 0.01, max rate = 0.90
-        DECGuideRate = float('0.' + out[2:3]) # 0.XX * sidereal, min rate = 0.10, max rate = 0.99
+        RAGuideRate = float('0.' + out[0:2])  # 0.XX * sidereal, min rate = 0.01, max rate = 0.90
+        DECGuideRate = float('0.' + out[2:4]) # 0.XX * sidereal, min rate = 0.10, max rate = 0.99
         logger.debug(f"Mount reported guiding rates: {RAGuideRate=}  {DECGuideRate=}")
         return RAGuideRate, DECGuideRate
 
@@ -692,7 +693,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
                 cmdRAData = "0" * (5 - len(RAGuideTime)) + RAGuideTime
 
             RAcmd = RAGuidePre + cmdRAData + '#'
-            mountSerialPort.write(bytes(RAcmd))
+            mountSerialPort.write(RAcmd.encode('utf-8'))
             logger.debug(f"Sent the RA guide command {RAcmd} to the mount.")
 
 
@@ -705,7 +706,7 @@ def correctTracking(mountSerialPort, coordinates, astrometryAPI, abortOnFailedSo
                 cmdDECData = "0" * (5 - len(DECGuideTime)) + DECGuideTime
 
             DECcmd = DECGuidePre + cmdDECData + '#'
-            mountSerialPort.write(bytes(DECcmd))
+            mountSerialPort.write(DECcmd.encode('utf-8'))
             logger.debug(f"Sent the DEC guide command {DECcmd} to the mount")
 
         logger.info("Succesfully executed necessary tracking corrections.")
@@ -805,9 +806,8 @@ def main():
 
                 elif acceptedSlew:
                     current_target = request_mount_command()
-                    sendTargetObjectCommand(current_target, 'parked')
                     sendTargetObjectCommand(current_target, 'take images')
-                    os.system(f'python3 {parentPath}/cameras/camera_control.py')
+                    subprocess.Popen(['python3', f'{parentPath}/cameras/camera_control.py'])
                     logger.info("Started the camera module.")
 
                     guideThread = threading.Thread(target=correctTracking, args=(mount_port, coordinates, ASTROMETRY_API, ABORT_FAILED_SOLVE_ATTEMPT), daemon=True)
